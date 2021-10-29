@@ -1,0 +1,186 @@
+
+#Log into Putty and activate qiime2
+
+###Run quime command:
+conda activate qiime2-2021.8
+export TMPDIR="/data/project_data/16S/tmptmpdir"
+echo $TMPDIR 
+
+
+#Generate smmary plots of the paired-read data
+
+qiime demux summarize \
+  --i-data /data/project_data/16S/mprun/demux-paired-end.qza \
+  --o-visualization demux-pyc-sub.qzv
+  
+# DADA2
+
+qiime dada2 denoise-paired \
+  --i-demultiplexed-seqs demux-sub-paired-end.qza \
+  --p-n-threads 1 \
+  --p-trim-left-f 16 \
+  --p-trim-left-r 0 \
+  --p-trunc-len-f 289 \
+  --p-trunc-len-r 257 \
+  --o-table table-sub.qza \
+  --o-representative-sequences rep-seqs-sub.qza \
+  --o-denoising-stats denoising-stats-sub.qza
+  
+#Make visualiation files from DADA2 qza files. 
+
+qiime feature-table summarize \
+  --i-table table-sub.qza \
+  --o-visualization table-sub.qzv \
+  --m-sample-metadata-file pyc_subset_manifest
+
+qiime feature-table tabulate-seqs \
+  --i-data rep-seqs-sub.qza \
+  --o-visualization rep-seqs-sub.qzv
+
+qiime metadata tabulate \
+  --m-input-file denoising-stats-sub.qza \
+  --o-visualization denoising-stats-sub.qzv
+  
+#table.qzv results:
+Number of samples	54
+Number of features	4,476
+Total frequency	3,570,582
+
+###Build a phylogenetic tree using - qiime phylogeny align-to-tree-mafft-fasttree
+  
+qiime phylogeny align-to-tree-mafft-fasttree \
+  --i-sequences rep-seqs-sub.qza \
+  --o-alignment aligned-rep-seqs-sub.qza \
+  --o-masked-alignment masked-aligned-rep-seqs-sub.qza \
+  --o-tree unrooted-tree-sub.qza \
+  --o-rooted-tree rooted-tree-sub.qza
+  
+#Calculate core Diversity Metrics to be used in alapha and beta diversity  
+qiime diversity core-metrics-phylogenetic \
+  --i-phylogeny rooted-tree-sub.qza \
+  --i-table table-sub.qza \
+  --p-sampling-depth 13000 \
+  --m-metadata-file pyc_subset_manifest \
+  --output-dir core-metrics-results-sub
+  
+#Alpha Diversity Metrics .qzv files:
+qiime diversity alpha-group-significance \
+  --i-alpha-diversity core-metrics-results-sub/faith_pd_vector.qza \
+  --m-metadata-file pyc_subset_manifest \
+  --o-visualization core-metrics-results-sub/faith-pd-group-significance-sub.qzv
+
+qiime diversity alpha-group-significance \
+  --i-alpha-diversity core-metrics-results-sub/evenness_vector.qza \
+  --m-metadata-file pyc_subset_manifest \
+  --o-visualization core-metrics-results-sub/evenness-group-significance-sub.qzv
+
+qiime diversity alpha-group-significance \
+  --i-alpha-diversity core-metrics-results-sub/shannon_vector.qza \
+  --m-metadata-file pyc_subset_manifest \
+  --o-visualization core-metrics-results-sub/shannon_vector-sub.qzv
+  
+qiime diversity alpha-rarefaction \
+  --i-table table-sub.qza \
+  --i-phylogeny rooted-tree-sub.qza \
+  --p-max-depth 100000 \
+  --m-metadata-file pyc_subset_manifest \
+  --o-visualization alpha-rarefaction-sub.qzv
+  
+#Beta Diversity Calcculations .qzv files
+
+qiime diversity beta-group-significance \
+  --i-distance-matrix core-metrics-results-sub/weighted_unifrac_distance_matrix.qza \
+  --m-metadata-file pyc_subset_manifest \
+  --m-metadata-column site-animal-health \
+  --o-visualization core-metrics-results-sub/weighted-unifrac-site-animal-health-significance-sub.qzv \
+  --p-pairwise
+
+qiime diversity beta-group-significance \
+  --i-distance-matrix core-metrics-results-sub/weighted_unifrac_distance_matrix.qza \
+  --m-metadata-file pyc_subset_manifest \
+  --m-metadata-column site-status \
+  --o-visualization core-metrics-results-sub/weighted-unifrac-site-status-group-significance-sub.qzv \
+  --p-pairwise
+ 
+#------------------------------------------------ 
+# Taxanomic classification
+``` All of this was done already by melissa and I am using those files
+#import into qiime artifact:
+qiime tools import \
+  --type 'FeatureData[Sequence]' \
+  --input-path /data/project_data/16S/training-feature-classifiers/gg_13_8_otus/rep_set/99_otus.fasta \
+  --output-path /data/project_data/16S/training-feature-classifiers/99_otus.qza
+
+qiime tools import \
+  --type 'FeatureData[Taxonomy]' \
+  --input-format HeaderlessTSVTaxonomyFormat \
+  --input-path /data/project_data/16S/training-feature-classifiers/gg_13_8_otus/taxonomy/99_otu_taxonomy.txt \
+  --output-path /data/project_data/16S/training-feature-classifiers/ref-taxonomy.qza
+
+#The V3–V4 region was amplified using the S-D-Bact-0341-b-S-17 (5′- 3’) CCTACGGGNGGCWGCAG and S-D-Bact-0785-a-A-21 (5′-3’) GACTACHVGGGTATCTAATCC
+
+qiime feature-classifier extract-reads \
+  --i-sequences 99_otus.qza \
+  --p-f-primer CCTACGGGNGGCWGCAG \
+  --p-r-primer GACTACHVGGGTATCTAATCC \
+  --p-min-length 100 \
+  --p-max-length 500 \
+  --o-reads ref-seqs.qza
+
+#train the Classifier
+qiime feature-classifier fit-classifier-naive-bayes \
+  --i-reference-reads ref-seqs.qza \
+  --i-reference-taxonomy ref-taxonomy.qza \
+  --o-classifier classifier.qza
+  
+#Test the classifier
+```
+cd /users/a/r/armccrac/SSWD/myresults_SSWD_subset
+
+conda activate qiime2-2021.8
+export TMPDIR="/data/project_data/16S/tmptmpdir"
+
+qiime feature-classifier classify-sklearn \
+  --i-classifier /data/project_data/16S/training-feature-classifiers/classifier.qza \
+  --i-reads /users/a/r/armccrac/SSWD/myresults_SSWD_subset/rep-seqs-sub.qza \
+  --o-classification taxonomy-sub.qza
+
+qiime metadata tabulate \
+  --m-input-file taxonomy-sub.qza \
+  --o-visualization taxonomy-sub.qzv
+
+qiime taxa barplot \
+  --i-table /users/a/r/armccrac/SSWD/myresults_SSWD_subset/table-sub.qza \
+  --i-taxonomy /users/a/r/armccrac/SSWD/myresults_SSWD_subset/taxonomy-sub.qza \
+  --m-metadata-file /users/a/r/armccrac/SSWD/myresults_SSWD_subset/pyc_subset_manifest \
+  --o-visualization taxa-bar-plots-sub.qzv
+
+
+## AncomBC attempting to get it working
+conda activate qiime2-2021.8
+export TMPDIR="/data/project_data/16S/tmptmpdir"
+
+R #gets you into the R terminal because ancomBC is an R program. 
+
+if (!requireNamespace("BiocManager", quietly=TRUE))
+    install.packages("BiocManager")
+BiocManager::install("ANCOMBC")
+install.packages('tidyverse')
+
+#Error with pip install..
+pip install git + https://github.com/mortonjt/q2-ancombc.git
+qiime dev refresh-cache
+
+qiime
+
+qiime ancombc ancombc \
+    --i-table /users/a/r/armccrac/SSWD/myresults_SSWD_subset/table-sub.qza \
+    --m-metadata-file /data/project_data/16S/pyc_subset_manifest_ancombc \
+    --p-formula "site-animal-health" \
+    --o-differentials ancombc_differentials_an-health-sub.qza
+    
+qiime metadata tabulate \
+ --i-input-file ancombc_differentials_an-health-sub.qza 
+ --i-input-file taxonomy.qza \
+ --o-visualization ancombc_differentials_an-health-sub.qzv
+

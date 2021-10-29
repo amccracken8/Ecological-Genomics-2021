@@ -1,0 +1,84 @@
+---
+title: "Notes"
+author: "Andrew"
+date: "9/15/2021"
+output: html_document
+---
+
+
+## R Markdown (Notes)
+
+Ecological Genomics: Programming notes
+
+#Bash access and use: 
+#Open Putty
+#Host: pbio381.uvm.edu
+#Login: armccrac Password:*********
+
+#Run quime command:
+```
+conda activate qiime2-2021.8
+```
+
+#import Data:
+
+```
+export TMPDIR="/data/project_data/16S/tmptmpdir"
+echo $TMPDIR 
+qiime tools import \
+  --type 'SampleData[PairedEndSequencesWithQuality]' \
+  --input-path /data/project_data/16S/pyc_manifest \
+  --input-format PairedEndFastqManifestPhred33V2 \
+  --output-path demux-paired-end_full.qza
+```
+
+#Generate summary plots on the data quality!
+```
+qiime demux summarize \
+  --i-data demux-paired-end_full.qza \         
+  --o-visualization demux-pyc-full.qzv
+``` 
+#Generate summary plots on the data quality! 
+
+```
+qiime demux summarize \
+  --i-data demux-paired-end_full.qza \
+  --o-visualization demux-pyc-full.qzv
+```
+
+#Take the .qzv file -> Visualize in Quime visualization online
+
+#Filtering Data using DADA2:
+#“Denoising” using DADA2 is a method to filter out noisy sequences, correct errors in marginal sequences, remove chimeric sequences, remove singletons, join denoised paired-end reads, and then dereplicate those sequences.
+#The features produced by denoising methods are often called “amplicon sequence variant” (ASV).
+# Run long commands on "Screen" which will run it on the server even when your computer is disconnected. 
+
+```
+qiime dada2 denoise-paired \
+  --i-demultiplexed-seqs demux-paired-end_full.qza \
+  --p-n-threads 4 \
+  --p-trim-left-f 16 \
+  --p-trim-left-r 0 \
+  --p-trunc-len-f 289 \
+  --p-trunc-len-r 257 \
+  --o-table table.qza \
+  --o-representative-sequences rep-seqs.qza \
+  --o-denoising-stats denoising-stats.qza
+```
+
+#DADA2 makes artifacts containing the feature table, corresponding feature sequences, and DADA2 denoising stats. The following code generates summaries of these files.
+
+```
+qiime feature-table summarize \
+  --i-table table.qza \
+  --o-visualization table.qzv \
+  --m-sample-metadata-file pyc_subset_manifest
+
+qiime feature-table tabulate-seqs \
+  --i-data rep-seqs.qza \
+  --o-visualization rep-seqs.qzv
+
+qiime metadata tabulate \
+  --m-input-file denoising-stats.qza \
+  --o-visualization denoising-stats.qzv
+```

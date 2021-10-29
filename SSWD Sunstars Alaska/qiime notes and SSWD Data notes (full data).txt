@@ -1,0 +1,251 @@
+###Ecological Genomics: Programming notes###
+
+#Bash access and use: 
+#Open Putty
+#Host: pbio381.uvm.edu
+# Login: armccrac Password:*********
+
+###Run quime command:
+conda activate qiime2-2021.8
+export TMPDIR="/data/project_data/16S/tmptmpdir"
+echo $TMPDIR 
+
+###import Data: Using the Full Dataser (subset available)
+
+qiime tools import \
+  --type 'SampleData[PairedEndSequencesWithQuality]' \
+  --input-path /data/project_data/16S/pyc_manifest \
+  --input-format PairedEndFastqManifestPhred33V2 \
+  --output-path demux-paired-end_full.qza
+  
+###Generate summary plots on the data quality!
+
+qiime demux summarize \
+  --i-data demux-paired-end_full.qza \         
+  --o-visualization demux-pyc-full.qzv
+  
+###Generate summary plots on the data quality!  
+
+qiime demux summarize \
+  --i-data demux-paired-end_full.qza \
+  --o-visualization demux-pyc-full.qzv
+  
+###Take the .qzv file -> Visualize in Quime visualization online
+
+###Filtering Data using DADA2:
+#“Denoising” using DADA2 is a method to filter out noisy sequences, correct errors in marginal sequences, remove chimeric sequences, remove singletons, join denoised paired-end reads, and then dereplicate those sequences.
+#The features produced by denoising methods are often called “amplicon sequence variant” (ASV).
+# Run long commands on "Screen" which will run it on the server even when your computer is disconnected. 
+
+### DATA-2 --> run in seperate sheet
+qiime dada2 denoise-paired \
+  --i-demultiplexed-seqs demux-paired-end_full.qza \
+  --p-n-threads 4 \
+  --p-trim-left-f 16 \
+  --p-trim-left-r 0 \
+  --p-trunc-len-f 289 \
+  --p-trunc-len-r 257 \
+  --o-table table.qza \
+  --o-representative-sequences rep-seqs.qza \
+  --o-denoising-stats denoising-stats.qza
+
+###DADA2 makes artifacts containing the feature table, corresponding feature sequences, and DADA2 denoising stats. The following code generates summaries of these files.
+
+qiime feature-table summarize \
+  --i-table table.qza \
+  --o-visualization table.qzv \
+  --m-sample-metadata-file /data/project_data/16S/pyc_manifest
+
+qiime feature-table tabulate-seqs \
+  --i-data rep-seqs.qza \
+  --o-visualization rep-seqs.qzv
+
+qiime metadata tabulate \
+  --m-input-file denoising-stats.qza \
+  --o-visualization denoising-stats.qzv
+  
+###move all data to ./myresults
+mv *.qza ./myresults/
+mv *.qzv ./myresults/
+
+###Move .qzv files to home computer and visualize with Qiime2
+
+#analyzing table.qzv: 
+number of samples: 85
+number of feaures (identified Taxa) 5992
+frequency: how often a taxa is present in the samples
+
+###What questions can we ask/answer
+# 1. How does alpha/beta diversity differ across sites and animal health? 
+# 2. How does microbial community structure change across sites? 
+# 3. does site or animal health have a greater effect on microbial community structure and diversity?
+# 4. Disease prevelance across sites?
+# 5. Does the relative abundance of microbes relative to animal health include the same taxa accross sites? 
+
+
+###Calculating Alpha and Beta diversity: Build a phylogenetic tree using - qiime phylogeny align-to-tree-mafft-fasttree
+
+qiime phylogeny align-to-tree-mafft-fasttree \
+  --i-sequences rep-seqs.qza \
+  --o-alignment aligned-rep-seqs.qza \
+  --o-masked-alignment masked-aligned-rep-seqs.qza \
+  --o-tree unrooted-tree.qza \
+  --o-rooted-tree rooted-tree.qza
+  
+ ## The next command calculates a whole suite of alpha and beta-diversity metrics!
+ #9000 was picked to include ALL data without loosing any samples
+ qiime diversity core-metrics-phylogenetic \
+  --i-phylogeny rooted-tree.qza \
+  --i-table table.qza \
+  --p-sampling-depth 9000 \
+  --m-metadata-file /data/project_data/16S/pyc_manifest \
+  --output-dir core-metrics-results
+  
+## Test for associations between categorical metadata columns and alpha diversity data. We’ll do that here for the Faith Phylogenetic Diversity (a measure of community richness) and evenness metrics.
+  
+qiime diversity alpha-group-significance \
+  --i-alpha-diversity core-metrics-results/faith_pd_vector.qza \
+  --m-metadata-file /data/project_data/16S/pyc_manifest \
+  --o-visualization core-metrics-results/faith-pd-group-significance.qzv
+
+qiime diversity alpha-group-significance \
+  --i-alpha-diversity core-metrics-results/evenness_vector.qza \
+  --m-metadata-file /data/project_data/16S/pyc_manifest \
+  --o-visualization core-metrics-results/evenness-group-significance.qzv
+
+# generte shannon vector qzv file 
+qiime diversity alpha-group-significance \
+  --i-alpha-diversity core-metrics-results/shannon_vector.qza \
+  --m-metadata-file /data/project_data/16S/pyc_manifest \
+  --o-visualization core-metrics-results/shannon_vector.qzv
+  
+# Assign taxonomies - who’s there?
+# Test for differential abundance using ANCOM or gneiss
+# Export and make pretty plots in R using ggplot2
+
+#Test for differences in beta diversity between groups:
+
+qiime diversity beta-group-significance \
+  --i-distance-matrix core-metrics-results/weighted_unifrac_distance_matrix.qza \
+  --m-metadata-file /data/project_data/16S/pyc_manifest \
+  --m-metadata-column site-animal-health \
+  --o-visualization core-metrics-results/weighted-unifrac-site-animal-health-significance.qzv \
+  --p-pairwise
+
+qiime diversity beta-group-significance \
+  --i-distance-matrix core-metrics-results/weighted_unifrac_distance_matrix.qza \
+  --m-metadata-file /data/project_data/16S/pyc_manifest \
+  --m-metadata-column site-status \
+  --o-visualization core-metrics-results/weighted-unifrac-site-status-group-significance.qzv \
+  --p-pairwise
+
+#Let’s make an Alpha diversity rarefaction plot! Did we over do the sequencing effort?
+
+qiime diversity alpha-rarefaction \
+  --i-table table.qza \
+  --i-phylogeny rooted-tree.qza \
+  --p-max-depth 100000 \
+  --m-metadata-file /data/project_data/16S/pyc_manifest \
+  --o-visualization alpha-rarefaction.qzv
+  
+
+## Discovering Taxonomic Groups! Who's there? 
+# creating reference sequences from OTUs that have been classified 
+# import reference data from greengenes database
+
+qiime tools import \
+  --type 'FeatureData[Sequence]' \
+  --input-path /data/project_data/16S/training-feature-classifiers/gg_13_8_otus/rep_set/99_otus.fasta \
+  --output-path /data/project_data/16S/training-feature-classifiers/99_otus.qza
+
+qiime tools import \
+  --type 'FeatureData[Taxonomy]' \
+  --input-format HeaderlessTSVTaxonomyFormat \
+  --input-path /data/project_data/16S/training-feature-classifiers/gg_13_8_otus/taxonomy/99_otu_taxonomy.txt \
+  --output-path /data/project_data/16S/training-feature-classifiers/ref-taxonomy.qza
+
+# minimul length kept 100bp, shouldnt be longer than 500bp. 
+# Trims it to what we usee to match our taxon reads making reference seq files
+
+qiime feature-classifier extract-reads \
+  --i-sequences 99_otus.qza \
+  --p-f-primer CCTACGGGNGGCWGCAG \
+  --p-r-primer GACTACHVGGGTATCTAATCC \
+  --p-min-length 100 \
+  --p-max-length 500 \
+  --o-reads ref-seqs.qza
+  
+# Train our classifier 
+qiime feature-classifier fit-classifier-naive-bayes \
+  --i-reference-reads ref-seqs.qza \
+  --i-reference-taxonomy ref-taxonomy.qza \
+  --o-classifier classifier.qza
+  
+# test the classifier - start here when using different subsets of data
+qiime feature-classifier classify-sklearn \
+  --i-classifier /data/project_data/16S/training-feature-classifiers/classifier.qza \
+  --i-reads ~/myresults/rep-seqs.qza \
+  --o-classification taxonomy.qza
+
+qiime metadata tabulate \
+  --m-input-file taxonomy.qza \
+  --o-visualization taxonomy.qzv 
+# coppy to home computer and view with Qiime2
+
+# Make Bar Plots of Taxa!
+
+qiime taxa barplot \
+  --i-table ~/myresults/table.qza \
+  --i-taxonomy ~/myresults/taxonomy.qza \
+  --m-metadata-file /data/project_data/16S/pyc_manifest \
+  --o-visualization taxa-bar-plots.qzv
+ 
+
+-------------------- #have not run yet -------
+# Testing for Relative Abundance: using multiple programs
+# screen because this is a big program # 
+
+#ANCOM - test for difference in abundance##
+screen
+
+cd /data/project_data/16S/mprun/taxa
+conda activate qiime2-2021.8
+export TMPDIR="/data/project_data/16S/tmptmpdir"
+
+qiime composition add-pseudocount \
+  --i-table ~/SSWD/myresults_run1/table.qza \
+  --o-composition-table comp-table.qza
+ 
+qiime composition ancom \
+  --i-table comp-table.qza \
+  --m-metadata-file /data/project_data/16S/pyc_manifest \
+  --m-metadata-column site-animal-health \
+  --o-visualization ancom-site-animal-health.qzv 
+  
+
+#Gneiss - test for difference in abundance
+qiime gneiss correlation-clustering \
+  --i-table ~/myresults/table.qza \
+  --o-clustering gneiss_corr_clust_hierarchy.qza
+
+qiime gneiss dendrogram-heatmap \
+  --i-table table.qza \
+  --i-tree gneiss_corr_clust_hierarchy.qza \
+  --m-metadata-file /data/project_data/16S/pyc_manifest \
+  --m-metadata-column site-animal-health \
+  --p-color-map seismic \
+  --o-visualization heatmap.qzv
+  
+#Ancom-BC - test for difference in abundance. Below is code for testing for differences in taxonomic abundances based on “site-animal-health”, but it’s still giving errors.
+
+qiime ancombc ancombc \
+    --i-table /data/project_data/16S/mprun/table.qza \
+  #  --m-metadata-file /data/project_data/16S/pyc_subset_manifest_ancombc \
+    --p-formula "site-animal-health" \
+    --o-differentials ancombc_differentials_an-health.qza
+    
+qiime metadata tabulate \
+ --i-input-file differentials.qza 
+ --i-input-file taxonomy.qza \
+ --o-visualization differentials.qzv
+
