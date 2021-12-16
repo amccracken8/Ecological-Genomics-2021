@@ -1,0 +1,853 @@
+
+cd /data/project_data/PopGenomics
+
+zcat poplar_hybrids.vcf.gz | head -n 11
+```
+##fileformat=VCFv4.2
+##filedate=20210624
+##source="beagle.27Jul16.86a.jar (version 4.1)"
+##INFO=<ID=AF,Number=A,Type=Float,Description="Estimated ALT Allele Frequencies">
+##INFO=<ID=AR2,Number=1,Type=Float,Description="Allelic R-Squared: estimated squared correlation between most probable REF dose and true REF dose">
+##INFO=<ID=DR2,Number=1,Type=Float,Description="Dosage R-Squared: estimated squared correlation between estimated REF dose [P(RA) + 2*P(RR)] and true REF dose">
+##INFO=<ID=IMP,Number=0,Type=Flag,Description="Imputed marker">
+##FORMAT=<ID=GT,Number=1,Type=String,Description="Genotype">
+##FORMAT=<ID=DS,Number=A,Type=Float,Description="estimated ALT dose [P(RA) + P(AA)]">
+##FORMAT=<ID=GP,Number=G,Type=Float,Description="Estimated Genotype Probability">
+#CHROM  POS ID  REF ALT QUAL    FILTER  INFO    FORMAT  201 202  ......
+```
+#metadata file = Combined_Transect_Sampling_Data_2020.txt
+
+####Working with VCF files using VCFtools###
+
+#How many SNP are there?
+#we may want to calculate diversity on a particular subset of our samples.
+
+vcftools --gzvcf poplar_hybrids.vcf.gz
+
+#isolate sample ID from just teh Alaska populations
+
+grep "Alaska" Combined_Transect_Sampling_Data_2020 | cut -f1
+
+#VCFtools to calculate pi in windows along the chromosome of a specified length using the windowed-pi flag. We can set a window of 50 kb. We’ll also want to add the `--out ~/path/outputname flag to redirect and name the output to our home directory:
+
+vcftools --gzvcf poplar_hybrids.vcf.gz \
+--chr <chromosome ID> \
+--maf <float> \
+--windowed-pi 50000 \
+--out ~/myresults/pi_chrX_mafX_win50K
+
+#Since we’re interested in hybrids, let’s also use VCFtools to calculate a genome-wide measure of individual heterozygosity using the --het flag.
+
+vcftools --gzvcf poplar_hybrids.vcf.gz \
+--maf <float> \
+--het \
+--out ~/myresults/het_mafX
+
+######
+##############Identifying ancestry with Admixture analysis
+######
+
+vcftools --gzvcf popular_hybrids.vcf.gz --maf 0.05 --recode --out poplar_hybrids.maf05/vcf/gz
+
+
+#Filter for maf using VCFtools and export a new vcf file using the --recode option (STEVE WILL DO THIS ONCE FOR EVERYONE)
+#Estimate which SNP sites show no LD across the genome using Plink v2.0
+
+# Set the path and filename to the vcf file filtered for minor allele frequency (maf)
+
+##!/bin/bash
+
+VCF=/data/project_data/PopGenomics/filename.mafXX.vcf.gz
+
+cd ~/poplar
+
+plink2 --vcf $VCF \
+--threads 3 \
+--double-id \
+--allow-extra-chr \
+--set-missing-var-ids @:# \
+--indep-pairwise 50 10 0.1 \
+--out poplar_hybrids_noLD
+
+# file ended in The filename ending with "prune.in" contains the SNP IDs that are in approx linkage equilibrium
+
+#Use Plink2.0 to convert from VCF to ADMIXTURE format and subset for no LD SNPs
+
+mkdir ~/poplar/Admixture 
+
+FILE=poplar_hybrids
+
+plink2 --vcf $VCF \
+--threads 3 \
+--allow-extra-chr \
+--make-bed \
+--out ~/poplar/Admixture/$FILE 
+
+plink2 --bfile ~/poplar/Admixture/$FILE \
+--threads 3 \
+--allow-extra-chr \
+--set-missing-var-ids @:# \
+--extract poplar_hybrids_noLD.prune.in \
+--make-bed \
+--out Admixture/~/poplar/Admixture/$FILE.LDpruned 
+
+# Replace column 1 Chr #'s with 0's, since ADMIXTURE doesn't like them
+
+cd ~/poplar/Admixture
+FILE2=poplar_hybrids.LDpruned
+
+awk '{$1=0;print $0}' $FILE2.bim > $FILE2.bim.tmp
+mv $FILE2.bim.tmp $FILE2.bim
+
+##### Run Admixture 
+# K represents spliting individuals into "k" different groups and allocate their ancestry based on their geneome into one of the "k" groups. 
+
+K=7 #assigning K value between 2 and 8
+
+admixture -j3 --cv $FILE2.bed $K >log${K}.out
+
+#cross validation error is how accurate the model is given your value of K found in log file
+K:
+2. 0.5146
+3. 0.50303
+4. 0.49744
+5. 0.49513 **
+6. 0.49514
+7. 0.49567
+8. 0.49540
+
+K=5 is the best for assessing the diversity of ancestor scores. 
+
+########## Download .q files to home machine and metadata file. 
+
+##We can test if admixture between lineages is increasing heterozygosity genome-wide by correlating (1) the extent of an individual’s ancestry diversity with (2) individual-level heterozygosity across the genome. We have (1) already; now let’s get (2)
+
+vcftools --gzvcf /data/project_data/PopGenomics/poplar_hybrids.maf05.vcf.gz \
+--het \
+--out het_maf05
+
+#######
+#################Detecting “selective sweeps” (a.k.a., hitch-hiking selection) in genomic data
+#######
+#RAiSD, or “Raised Accuracy in Sweep Detection”. has the ability to look at multiple signatures in the data such as nucleotide diversity and linkage disequilibrium. 
+
+# Rename value in <> to your chromosome number! Include the zero only if your chromosome # is <10
+
+#Step 1 – pick a chromosome, any chromosome (there are 19 in poplar)
+#Step 2: Generate your parsed vcf file:
+
+#!/Bin/bash
+myChr=Chr03  
+
+# myChr=Chr02  # I used Chr02 for my test run...
+
+cd /data/project_data/PopGenomics
+
+# Run VCFtools to subset the big vcf file for just your chromosome
+# 
+
+vcftools --gzvcf poplar_hybrids.maf05.vcf.gz \
+--chr $myChr \
+--out shared/$myChr \
+--recode 
+
+####
+#######Step 3: Grab the coordinates of the centromere region
+####
+#I obtained the centromeric locations for each of poplar’s 19 chromosomes from this awesome paper: Weighill et al. (2019)
+
+#I downloaded their Table S1 and have it available on the server:
+
+# Extract the centromere coordinates for your chromosome so you can exclude those regions from your sweep analysis
+
+grep $myChr poplar_centromeres.txt > shared/${myChr}_centromere.txt # grab the centromere location for your chromosome
+
+cd shared/
+
+mkdir ${myChr}_sweeps  # make a new directory for your chromosome analyses
+
+mv *${myChr}* ${myChr}_sweeps # clean up the space by moving all files into your the directory you just made
+
+cd ${myChr}_sweeps
+
+
+####Step 4 – Run RAiSD to detect selective sweeps!
+# Test for selective sweeps
+
+RAiSD -n $myChr \
+-I ${myChr}.recode.vcf \
+-f -t -R -P -D -A 0.99 \
+-X ${myChr}_centromere.txt
+
+#Step 5.1 – Estimate nucleotide diversity using 50 kb sliding windows
+#VCFtools can get the job done…
+
+# Estimate nucleotide diversity (pi) in sliding windows of 50kb
+
+vcftools --vcf ${myChr}.recode.vcf \
+--chr $myChr \
+--window-pi 50000 \
+--out $myChr
+
+#Step 5.2: Calculate Fst between species using 50kb sliding windows
+#For estimating Fst, we need to define groups! For this analysis, we’re going to define groups based on the K=5 Admixture run:
+
+# First, need to subset the metadata file for just those individuals with balsamifera ancestry
+# We can do this using an interactive R session at the commandline. 
+# An alternative is to put these R commands in a script, save it with the ".r" extension, 
+# and at the commandline type "Rscript myscript.r"
+
+R # Opens an interactive R session within Unix...
+Qscores <- read.table("../poplar_hybrids.LDpruned.5.Q", sep=" ",header=F)
+names(Qscores) = c("K1","K2","K3","K4","K5")
+
+meta <- read.table("../../Combined_Transect_Sampling_Data_2020.txt",sep="\t",header=T)
+
+merged <- cbind(meta,Qscores)
+str(merged)
+
+Bals_Inds <- merged[which(merged$K4>0.5),1]  
+length(Bals_Inds) # Should net you 188 individuals
+
+Tricho_Inds <- merged[which(merged$K4<=0.5),1]
+length(Tricho_Inds) # Should net you 388 individuals
+
+# Write out your Bals and Tricho lists as tab-delimited text files
+write.table(Bals_Inds, "Bals_Inds.txt", quote=F, row.names=F, col.names=F)
+
+write.table(Tricho_Inds, "Tricho_Inds.txt", quote=F, row.names=F, col.names=F)
+
+quit()
+
+# When prompted with: "Save workspace image? [y/n/c]"  choose: n
+
+##Then once you’ve got your list of sample names for each species, you’re ready to run the Fst analysis in VCFtools:
+
+##
+###### Calculate Fst between Balsam and Tricho using sliding windows of 50kb
+##
+vcftools --vcf ${myChr}.recode.vcf \
+--weir-fst-pop Bals_Inds.txt \
+--weir-fst-pop Tricho_Inds.txt \
+--fst-window-size 50000 \
+--out Bals_Tricho_All
+
+###***Step 6: Transfer files to your laptops and plot in R!
+#everything but the VCF file
+
+
+
+########################################################
+# Back on the server
+
+#### Local Ancestry Inference (LAI)
+# 1. From which population or species did a specific gene or genomic region derive its ancestry along the chromosome?
+# 2. What regions of the genome are especially permeable to introgression, and hence may be candidates for adaptive introgression?
+# 3. Which genomic regions are resistant to introgression, and therefore may contribute to reproductive isolation between lineages?
+
+### instal packages into home directory on server from home directory 
+
+git clone https://github.com/bcm-uga/Loter.git
+cd Loter/python-package
+python setup.py install --user
+
+# addmixture K=5
+# P. balsamiera vs. P. trichocarpa as reference species for hybrids to be compaired to for ancestry
+
+#navigate to shared folder on server: 
+
+cd /data/project_data/PopGenomics/shared/Chr03_sweeps/
+
+CHR="Chr03"  # Be sure to customize to your chromosome number!!!
+
+echo $CHR  # Does it look right?
+
+# Then make some new folders to store future results in:
+
+mkdir LAI
+
+cd LAI/
+
+mkdir Admixed
+
+#To parse the individuals by their ancestry coefficients @ K=5, we’ll use R at the commandline. We’ll need the Q files for the K=5 ADMXITURE run, and the meta-data.
+
+R
+
+# Import K=5 Admixture run
+Qscores <- read.table("/data/project_data/PopGenomics/shared/poplar_hybrids.LDpruned.5.Q", sep=" ",header=F)
+names(Qscores) = c("K1","K2","K3","K4","K5")
+
+# Import meta-data
+meta <- read.table("/data/project_data/PopGenomics/Combined_Transect_Sampling_Data_2020.txt",sep="\t",header=T)
+
+# Combine them 
+merged <- cbind(meta,Qscores)
+str(merged)
+
+## Here’s how we’re going to group samples based on ADMIXTURE ancestry assignments:
+# Balsam = K4 > 0.99
+# Tricho = (K1 + K2 + K5) > 0.99
+# PopSpp = K3 > 0.5 # Want to exclude from our LAI analysis!
+# Admixed = Everything else!
+
+for(i in 1:nrow(merged)){
+if(merged$K4[i]>=0.99){
+    merged$Anc[i]="Bals"
+    }else if (sum(c(merged$K1[i],merged$K2[i],merged$K5[i]))>=0.99){
+    merged$Anc[i]="Tricho"
+    } else if(merged$K3[i]>0.5){
+    merged$Anc[i]="PopSpp"
+    }else{
+    merged$Anc[i]="Admx"
+    }
+}
+
+table(merged$Anc)
+
+#Results: 
+  Admx   Bals PopSpp Tricho
+   442     46      8     80
+
+# Now, we can write these sample IDs out to separate files to use with VCFtools to group our samples.
+
+Bals_Inds_Ref <- merged[merged$Anc=="Bals",1]  
+length(Bals_Inds_Ref) # Should net you 46 individuals
+write.table(Bals_Inds_Ref, "Balsam.Inds", quote=F, row.names=F, col.names=F)
+
+Tricho_Inds_Ref <- merged[merged$Anc=="Tricho",1]
+length(Tricho_Inds) # Should net you 80 individuals
+write.table(Tricho_Inds_Ref, "Tricho.Inds", quote=F, row.names=F, col.names=F)
+
+Admixed_Inds <- merged[merged$Anc=="Admx",1]
+length(Admixed_Inds) # Should net you 442 individuals
+write.table(Admixed_Inds, "Admixed.Inds", quote=F, row.names=F, col.names=F)
+
+quit() # choose 'n' when prompted
+
+
+
+### Now we want to generate separate VCF files for each of our “reference” panels (Balsam and Tricho) and our admixed individuals.
+# First we grab just the Balsam and Tricho reference individuals
+
+vcftools --gzvcf /data/project_data/PopGenomics/shared/${CHR}_sweeps/${CHR}.recode.vcf --keep Balsam.Inds --recode --stdout | gzip -c >poplar_hybrids.maf05.${CHR}.BalsRef.vcf.gz
+
+vcftools --gzvcf /data/project_data/PopGenomics/shared/${CHR}_sweeps/${CHR}.recode.vcf --keep Tricho.Inds --recode --stdout | gzip -c >poplar_hybrids.maf05.${CHR}.TrichoRef.vcf.gz
+
+# export a list of all the SNP positions in our VCF files for bringing into R later and merging with the LAI outputs. only needs to be done for 1 of the vcf files b/c possitions will be the same accross them al
+
+vcftools --gzvcf poplar_hybrids.maf05.${CHR}.BalsRef.vcf.gz --kept-sites --out ${CHR}
+
+#********Error missing argument?? **********
+
+
+# What about making VCF files for the Admixed samples?
+
+#This loop:
+
+#reads in our master VCF file that is already subsetted by our chromosome of interest
+#subsets by just the individual of interest (--indv)
+#writes a new file based on the subsetting (--recode)
+#passes that file to “stdout” which is used to send it to another program on the other side of the “pipe” |
+#uses gzip to compress the new output file to save space
+#uses the < Admixed.Inds to feed the loop sample ID’s of the admixed individuals, one line at a time.
+
+Screen
+
+while read ID
+do
+  vcftools --gzvcf /data/project_data/PopGenomics/shared/${CHR}_sweeps/${CHR}.recode.vcf \
+  --indv $ID \
+  --recode \
+  --stdout | gzip -c   >Admixed/poplar_hybrids.maf05.${CHR}.${ID}.vcf.gz
+done < Admixed.Inds
+
+#DETATCH FROM SCREEN
+
+##### Setp 3: Run Loter!
+
+
+# First, make a new dir to store the results:
+#start a NEW screen (it takes a LONG time)
+#run Loter iteratively for each Admixed individual in a while read loop
+
+#-o directs the analysis output to the Loter_out directory you made, and names it by the ID name
+#-n controls how many cpu’s to use in the analysis (just 1 for now)
+#-pc implements phase correction on the inferred ancestry
+#-v prints “verbose” progress updates to the screen as the analysis proceeds
+
+cd /data/project_data/PopGenomics/shared/Chr03_sweeps
+
+mkdir Loter_out
+
+pip install scikit-allel
+
+CHR="Chr03"  # Be sure to customize to your chromosome number!!!
+
+echo $CHR  # Does it look right?
+
+while read ID
+do
+for file in Admixed/poplar_hybrids.maf05.${CHR}.${ID}.vcf.gz
+do
+loter_cli -r poplar_hybrids.maf05.${CHR}.BalsRef.vcf.gz poplar_hybrids.maf05.${CHR}.TrichoRef.vcf.gz \
+-a $file \
+-f vcf \
+-o Loter_out/${ID}_LAI.txt \
+-n 1 \
+-pc -v
+done
+done < Admixed.Inds
+
+##################################### Day 7 how to collate and convert a massive amount of output into something we can work with
+
+#Let’ look at one output together. We can open it in vim at the commandline: in the Loter_out files
+vim 201_LAI.txt
+set nowrap
+
+#Our pipeline:
+#1 Convert haploid 0/1 calls to diploid 0/1/2 calls
+#2 Collate 0/1/2 data across all admixed individuals into a single data matrix 
+#3 Convert matrix to Plink2.0 format (*.bed file)
+#4 Estimate frequencies of local ancestry along chromosomes
+
+#### (1) Convert haploid calls to diloid using datamash and (2) Collate across individuals
+#As LOTER files get output, can convert these into 0/1/2 encoding using the bash tool 'datamash'
+
+cd /data/project_data/PopGenomics/shared/Chr03_sweeps/LAI
+
+CHR="Chr03"
+
+echo $CHR # Is it right?
+
+Nsites=`tail -n +2 ${CHR}.kept.sites | wc -l | sed 's/\s/\t/' | cut -f1` # calculates and stores the number of SNP sites for your chromosome
+
+echo $Nsites # For Chr03, Nsites = 25954 SNPs # will be different for each chromosome
+
+Ninds=`wc -l Admixed.Inds | sed 's/\s/\t/' | cut -f1` # calculates and stores the number of admixed individuals you previously identified
+
+echo $Ninds  # Should be 442 individuals
+
+# Now that we have the variables defined, we can run the datamash step:
+
+touch ${CHR}_matrix.diploid
+
+for file in Loter_out/*.txt
+do
+datamash --field-separator=" " sum 1-${Nsites} <$file >>${CHR}_matrix.diploid
+done
+
+# The field separator used by Loter is a space, but most programs are expecting a tab to separate SNP positions. Additionally, right now the loci are in columns and individuals are in rows, but we want the opposite (loci in rows, individuals in columns). So, we also need to transpose our matrix. We can do this with 1 line of code by piping together several functions
+
+sed 's/\s/\t/g' ${CHR}_matrix.diploid | cut -f1-${Nsites} | datamash transpose >${CHR}_matrix.diploid.tr
+
+head Chr03_matrix.diploid.tr
+
+#### (3) Convert matrix to Plink2.0 format
+# Plink2.0 is a very powerful and flexible software for genomics analysis. And, it accepts as input 0/1/2 allele dosage data like ours! Unfortunately, it’s required data format is somewhat archaic, and requires the main data matrix to be appended with the SNP positions. It also requires an accessory file that describes the individuals in our sample (.fam file). Below, we work though the steps to make these:
+
+seq -f "snp%02g" 1 $Nsites >sites
+
+printf 'A\n%.0s' $(seq $Nsites) >allele1  # Create a dummy column of 'A' the length of your Nsites file
+
+printf "T\n%.0s" $(seq $Nsites) >allele2 # Create a dummy column of 'T' the length of your Nsites file
+
+mkdir Plink
+
+paste sites allele1 allele2 ${CHR}_matrix.diploid.tr >Plink/${CHR}_matrix.diploid.tr.forPlink
+
+head Plink/{CHR}_matrix.diploid.tr.forPlink
+#head Plink/Chr03_matrix.diploid.tr.forPlink
+
+#This step will make the fam file for our samples: have to fill with a lot of dummy variables to get it to run becaue the program was originally made for human genetics and has a lot of fields that are not applicable to this analysis.
+
+cat /data/project_data/PopGenomics/Combined_Transect_Sampling_Data_2020.txt | \
+cut -f1-2 | \
+grep -w -f Admixed.Inds - | \
+cut -f2 | \
+paste - Admixed.Inds >FID_IID
+
+printf '0\t0\t0\t-9\n%.0s' $(seq $Ninds) >dummy
+
+paste FID_IID dummy  >Plink/${CHR}_fam.forPlink
+
+head Plink/Chr03_fam.forPlink
+
+
+
+# Now, we’re ready to run the conversion into Plink format (.bed) 
+## This runs the Plink conversion from allele dosages to bed format 
+
+cd Plink/ 
+
+plink2 --import-dosage ${CHR}_matrix.diploid.tr.forPlink noheader \
+--fam ${CHR}_fam.forPlink \
+--make-bed \
+--out ${CHR}_Admixed_FAI
+
+#calculate the local ancestry frequencies at each SNP position:
+
+plink2 --bfile ${CHR}_Admixed_FAI --freq --out ${CHR}_LAI_freq
+
+#### Transfer files to home computer through WinSCP from LAI directory
+# Chr03_SNP.kept.sites
+# Chr03_LAI_freq.afreq
+
+############## Visualize in R
+
+library(ggplot2)
+
+setwd("path to your output files...")
+
+# Read in list of positions
+snps <- read.table("LocalAncestry/Chr03_SNP.kept.sites",sep="\t", header=T)
+
+# Read in the local ancestry frequencies from Plink
+AF <- read.table("Chr03_LAI_freq.afreq", skip=1,sep="\t",header=F)  
+
+# Note the skip=1 here.  
+# This skips the first line, since Plink's header line doesn't play well with R.  
+# We'll define our own header line below.
+
+names(AF) = c("CHROM",  "ID",   "REF",  "ALT",  "ALT_FREQS",    "OBS_CT")
+
+AF2 <- cbind(snps,AF)
+
+str(AF2) # How does it look?
+
+# A simple plot:
+
+p1 <- ggplot(AF2[,-3],aes(x=POS,y=ALT_FREQS)) +
+  geom_line(size=0.25, color="blue") + 
+  xlab("Position (bp) along chromosome") +
+  ylab("Frequency P. trichocarpa ancestry")
+
+p1
+
+
+
+"
+1) Wrangle the phenotype data from the common gardens to get just the data for the admixed individuals we ran Loter on
+########----------------------- Day 8 -------------------------
+2) Get genome-wide ancestry for those same individuals (based off the K=5 model, subsetting for just the balsamifera Q value)
+3) Run Admixture mapping in Plink
+4) Bring the results into R and visualize
+"
+#Step 1: Get the phentype data ready:
+CHR="Chr03"
+
+echo $CHR  # Does it look right?
+
+cd /data/project_data/PopGenomics/shared/${CHR}_sweeps/LAI/
+
+# Get phenotype data from meta file for the admixed samples:
+
+tail -n +2 /data/project_data/PopGenomics/VT_Garden_Phenotypes_2021.txt | \
+grep -w -f Admixed.Inds - >Admixed.pheno | wc -l
+
+printf "#FID\tIID\tRUST\tFLUSH\tSET\n%.0s" >Plink/pheno.forPlink
+
+cat Admixed.pheno >>Plink/pheno.forPlink
+
+## Setp 2:
+
+# Get K=2 ADMIX to use as covariate; Need to use tail -n +2 to skip the header in the metadata file before pasting to the Q file
+
+tail -n +2 /data/project_data/PopGenomics/Combined_Transect_Sampling_Data_2020.txt | \
+cut -f1 | \
+paste - /data/project_data/PopGenomics/shared/poplar_hybrids.LDpruned.5.Q | \
+grep -w -f Admixed.Inds - | \
+sed 's/\s/\t/g' | \
+cut -f 1,5 >Plink/Admixed_KBals
+
+cat /data/project_data/PopGenomics/Combined_Transect_Sampling_Data_2020.txt | \
+cut -f1-2 | \
+grep -w -f Admixed.Inds - | \
+sed 's/\s/\t/g' | \
+cut -f2 >Plink/Transect
+
+# Create the cov file with KBals
+
+printf "#FID\tIID\tK2Q\n%.0s" >Plink/cov.forPlink
+paste Plink/Transect Plink/Admixed_KBals >>Plink/cov.forPlink
+
+
+###Step 3: Run Plink admixture mapping
+
+cd Plink/
+
+plink2 --bfile ${CHR}_Admixed_FAI \
+--pheno pheno.forPlink \
+--covar cov.forPlink \
+--glm omit-ref
+
+#### All files you want on home machine:
+
+# Meta-data:
+/data/project_data/PopGenomics/Combined_Transect_Sampling_Data_2020.txt
+
+# Phenotypes:
+/data/project_data/PopGenomics/VT_Garden_Phenotypes_2021.txt
+
+# Admixed.Inds:
+/data/project_data/PopGenomics/shared/${CHR}_sweeps/LAI/Admixed.Inds
+
+# SNPs analyzed for your chromosome:
+/data/project_data/PopGenomics/shared/${CHR}_sweeps/LAI/${CHR}.kept.sites
+
+# Frequencies of Local Ancestry:
+/data/project_data/PopGenomics/shared/${CHR}_sweeps/LAI/Plink/${CHR}_LAI_freq.afreq
+
+# Genome-wide balsamifera ancestry:
+/data/project_data/PopGenomics/shared/${CHR}_sweeps/LAI/Plink/Admixed_KBals
+
+
+########### Into R ###########
+# First, let’s read in all these files and merge them together based on the ID variable that they have in common.
+
+library(ggplot2)
+library(gridExtra)
+
+setwd("path to your files...")
+
+# Get the list of admixed individuals:
+Admixed <- read.table("Admixed.Inds",header=F)
+
+# Get the meta data:
+meta <- read.table("Combined_Transect_Sampling_Data_2020.txt", sep="\t",header=T)
+
+# merge them together:
+meta_admx <- merge(meta, Admixed, by.x="ID", by.y="V1")
+str(meta_admx)  
+
+# Read in the Admixture coefficients for KBals that we made from the K=5 file:
+KBals <- read.table("Admixed_KBals", sep="\t", header=F)
+names(KBals) = c("ID","KBals")
+
+# Second merge:
+meta_admx_KBals <- merge(meta_admx,KBals,by="ID")
+
+
+# Bring in phenotype data:
+pheno <- read.table("VT_Garden_Phenotypes_2021.txt",sep="\t",header=T)
+
+# Merge pheno data with meta and KBals:
+meta_admx_KBals_pheno <- merge(meta_admx_KBals,pheno,by="ID")
+
+######
+########## The first question we can ask is if these phenotypes show a relationship with the overall ancestry fraction in each individual, averaged across the genome (as done by our previous ADMIXTURE analysis).
+
+#  Rust
+plotRust <- ggplot(meta_admx_KBals_pheno,aes(x=KBals,y=RUST, color=Transect.x)) +
+  geom_point(size=2) + 
+  xlab("Proportion P. balsamifera ancestry") +
+  ylab("Rust susceptibility") 
+
+plotRust
+
+# Bud set
+plotBudset <- ggplot(meta_admx_KBals_pheno,aes(x=KBals,y=SET, color=Transect.x)) +
+  geom_point(size=2) + 
+  xlab("Proportion P. balsamifera ancestry") +
+  ylab("Bud set") 
+
+plotBudset
+
+# Bud flush
+plotBudflush <- ggplot(meta_admx_KBals_pheno,aes(x=KBals,y=FLUSH, color=Transect.x)) +
+  geom_point(size=2) + 
+  xlab("Proportion P. balsamifera ancestry") +
+  ylab("Bud flush") 
+
+plotBudflush
+
+grid.arrange(plotRust, plotBudset, plotBudflush, nrow = 3)
+
+# linear models testing trait ~ genome-wide admixture association
+summary(lm(RUST~KBals + Transect.x, data=meta_admx_KBals_pheno))
+
+summary(lm(SET~KBals + Transect.x, data=meta_admx_KBals_pheno))
+
+summary(lm(FLUSH~KBals + Transect.x, data=meta_admx_KBals_pheno))
+
+######
+#################What about the effects of local ancestry within the genome, after controlling for genome-wide ancestry effects as a covariate in the GLM model?
+######
+
+######  Bring in Association results from Plink   ######
+
+rust <- read.table("plink2.RUST.glm.linear",skip=1,sep="\t",header=F)
+names(rust) = c("CHROM",    "POS",  "ID",   "REF",  "ALT",  "A1",   "TEST", "OBS_CT",   "BETA", "SE",   "T_STAT",   "P")
+rust2 <- rust[which(rust$TEST=="ADD"),]
+
+# Define association outliers as the upper 0.1% of p-values
+
+#########  rust  #########
+rust2 <- cbind(snps, rust2[,-c(1:2)])
+rust2$outlier = ifelse(rust2$P<quantile(rust2$P,0.001),2,1)
+
+p1 <- ggplot(rust2,aes(x=POS,y=-1*log10(P))) +
+  geom_point(size=rust2$outlier, color=rust2$outlier) + 
+  xlab("Position (bp) along chromosome") +
+  ylab("-log10 P-value") +
+  ggtitle("Rust infection")
+
+#p1
+
+####### Bud set  #########
+budset <- read.table("plink2.SET.glm.linear",skip=1,sep="\t",header=F)
+names(budset) = c("CHROM",  "POS",  "ID",   "REF",  "ALT",  "A1",   "TEST", "OBS_CT",   "BETA", "SE",   "T_STAT",   "P")
+budset2 <- budset[which(budset$TEST=="ADD"),]
+budset2 <- cbind(snps, budset2[,-c(1,2)])
+budset2$outlier = ifelse(budset2$P<quantile(budset2$P,0.001),2,1)
+
+p2 <- ggplot(budset2,aes(x=POS,y=-1*log10(P))) +
+  geom_point(size=budset2$outlier, color=budset2$outlier) + 
+  xlab("Position (bp) along chromosome") +
+  ylab("-log10 P-value") +
+  ggtitle("Bud set")
+
+#p2
+
+#########  Bud flush  #########
+budflush <- read.table("plink2.FLUSH.glm.linear",skip=1,sep="\t",header=F)
+names(budflush) = c("CHROM",    "POS",  "ID",   "REF",  "ALT",  "A1",   "TEST", "OBS_CT",   "BETA", "SE",   "T_STAT",   "P")
+budflush <- budflush[which(budflush$TEST=="ADD"),]
+budflush2 <- cbind(snps, budflush[,-c(1,2)])
+budflush2$outlier = ifelse(budflush2$P<quantile(budflush2$P,0.001),2,1)
+
+p3 <- ggplot(budflush2,aes(x=POS,y=-1*log10(P))) +
+  geom_point(size=budflush2$outlier, color=budflush2$outlier) + 
+  xlab("Position (bp) along chromosome") +
+  ylab("-log10 P-value") +
+  ggtitle("Bud flush")
+
+#p3
+
+grid.arrange(p1, p2, p3, nrow = 3)
+
+
+
+#You can also get the outliers as lists to investigate further by using GenomicRanges() (see the Day 5 tutorial) or the Phytozome JBrowse to figure out which gene IDs fall within these regions.
+
+# Get outliers for a given trait association:
+
+rust_outliers <- rust2[which(rust2$outlier==2),c(2,3,9)]
+set_outliers <- budset2[which(budset2$outlier==2),c(2,3,9)]
+flush_outliers <- budflush2[which(budflush2$outlier==2),c(2,3,9)]
+
+
+
+####What about if we want to plot local ancestry variation along with our association plots? Let’s make sliding windows of 50kb to plot local ancestry, so it’s a bit more smoothed.
+
+# Read in list of positions
+snps <- read.table("Chr02.kept.sites",sep="\t", header=T)
+
+# Plot freq of LAI along chr
+AF <- read.table("Chr02_LAI_freq.afreq", skip=1,sep="\t",header=F)
+names(AF) = c("CHROM",  "ID",   "REF",  "ALT",  "ALT_FREQS",    "OBS_CT")
+str(AF)
+
+AF2 <- cbind(snps,AF)
+
+windows <- seq(1,max(AF2$POS),5e4)
+AF_windows <- numeric()
+
+for(i in 1:length(windows)){
+  tmp=AF2[which(AF2$POS>windows[i] & AF2$POS<windows[i+1]),"ALT_FREQS"]
+  ancfreq=mean(tmp)
+  AF_windows[i] = ancfreq
+}
+
+AF3 <- as.data.frame(cbind(windows,AF_windows))
+names(AF3) = c("window","AvgAncFreq")
+
+
+
+###We can define outlier regions of local ancestry along chromosomes as those that are +/- 2 standard deviations (SD) from the mean ancestry on that chromosome. These may be interesting regions to explore for candidate genes, especially if they’re also co-located with our phenotype associations.
+
+upper = mean(AF3$AvgAncFreq,na.rm=T) + 2*sd(AF3$AvgAncFreq,na.rm=T)
+lower = mean(AF3$AvgAncFreq,na.rm=T) - 2*sd(AF3$AvgAncFreq,na.rm=T)
+
+outliers_upper = AF3[which(AF3$AvgAncFreq>upper),]
+outliers_lower = AF3[which(AF3$AvgAncFreq<lower),]
+
+# Print the outlier regions out
+outliers_upper
+outliers_lower
+
+# And finally, make the 4-panel plot with the trait associations
+p4 <- ggplot(AF3[,-3],aes(x=window,y=AvgAncFreq)) +
+  geom_line(size=0.8, color="blue") + 
+  xlab("Position (bp) along chromosome") +
+  ylab("Frequency P. trichocarpa ancestry") +
+  geom_hline(yintercept=mean(AF2$ALT_FREQS), color = "red") + 
+  geom_hline(yintercept=upper, linetype="dashed", color = "red") + 
+  geom_hline(yintercept=lower, linetype="dashed", color = "red") +
+  ggtitle("Chr02: Local ancestry")
+
+p4
+
+
+grid.arrange(p1, p2, p3, p4, nrow = 4)
+
+
+#######
+# Get the betas from each trait and look at pleiotropy between traits
+betas <- cbind(rust[,c(1:3,9)],budset2[,9],budflush2[,9])
+names(betas) = c("CHROM","POS","ID","beta_rust","beta_set","beta_flush")
+str(betas)
+
+cor(betas[,4:6],betas[4:6])
+
+plot(beta$beta_set,betas$beta_flush)
+
+p5 <- ggplot(betas,aes(x=beta_flush,y=beta_set)) +
+  geom_point(color="darkgray") + 
+  xlab("Beta bud flush") +
+  ylab("Beta bud set") +
+  ggtitle("Correlation of bud set and flush effect sizes")
+
+p5
+
+############### re run code now with climate data for day 8 stuff. 
+#Day-8 EcoGen Assignment 3 notes for re-running Day 8
+#climate data \data\project_data\PopGenomics\climDat.txt
+
+CHR="Chr03"
+echo $CHR  # Does it look right?
+
+cd /data/project_data/PopGenomics/shared/${CHR}_sweeps/LAI/
+
+
+# Get phenotype data from meta file for the admixed samples:
+tail -n +2 /data/project_data/PopGenomics/climDat.txt | \
+grep -w -f Admixed.Inds - >Admixed.clim 
+
+printf "#FID\tIID\tmean_finalFreeze\tmean_cGDDfreeze\tmed_DD0\n%.0s" >Plink/clim.forPlink
+
+cat Admixed.clim >>Plink/clim.forPlink
+
+tail -n +2 /data/project_data/PopGenomics/Combined_Transect_Sampling_Data_2020.txt | \
+cut -f1 | \
+paste - /data/project_data/PopGenomics/shared/poplar_hybrids.LDpruned.5.Q | \
+grep -w -f Admixed.Inds - | \
+sed 's/\s/\t/g' | \
+cut -f 1,5 >Plink/Admixed_KBals
+
+cat /data/project_data/PopGenomics/Combined_Transect_Sampling_Data_2020.txt | \
+cut -f1-2 | \
+grep -w -f Admixed.Inds - | \
+sed 's/\s/\t/g' | \
+cut -f2 >Plink/Transect
+# Create the cov file with KBals
+
+printf "#FID\tIID\tK2Q\n%.0s" >Plink/cov.forPlink
+paste Plink/Transect Plink/Admixed_KBals >>Plink/cov.forPlink
+
+cd Plink/
+
+plink2 --bfile ${CHR}_Admixed_FAI \
+--pheno clim.forPlink \
+--covar cov.forPlink \
+--glm omit-ref

@@ -1,0 +1,213 @@
+Seastar Wasting. Pichnopodia (Alaskan Sea Star)
+
+/data/project_data/superss
+
+conda activate qiime2-2021.8
+export TMPDIR="/data/project_data/16S/tmptmpdir"
+echo $TMPDIR 
+
+###import Data: Using the Full Dataser (subset available)
+qiime tools import \
+  --type 'SampleData[PairedEndSequencesWithQuality]' \
+  --input-path /data/project_data/16S/pyc_manifest \
+  --input-format PairedEndFastqManifestPhred33V2 \
+  --output-path demux-paired-end_full.qza
+  
+###Generate summary plots on the data quality!
+qiime demux summarize \
+  --i-data demux-paired-end_full.qza \         
+  --o-visualization demux-pyc-full.qzv
+  
+##Data-2 denoising stats
+### DATA-2 --> run in seperate sheet
+qiime dada2 denoise-paired \
+  --i-demultiplexed-seqs demux-paired-end_full.qza \
+  --p-n-threads 4 \
+  --p-trim-left-f 16 \
+  --p-trim-left-r 0 \
+  --p-trunc-len-f 289 \
+  --p-trunc-len-r 257 \
+  --o-table table.qza \
+  --o-representative-sequences rep-seqs.qza \
+  --o-denoising-stats denoising-stats.qza
+  
+#analyzing table.qzv: 
+'number of samples: 85
+number of feaures (identified Taxa) 5992
+frequency: how often a taxa is present in the samples'
+
+qiime feature-table summarize \
+  --i-table table.qza \
+  --o-visualization table.qzv \
+  --m-sample-metadata-file /data/project_data/16S/pyc_manifest
+
+qiime feature-table tabulate-seqs \
+  --i-data rep-seqs.qza \
+  --o-visualization rep-seqs.qzv
+
+qiime metadata tabulate \
+  --m-input-file denoising-stats.qza \
+  --o-visualization denoising-stats.qzv
+
+###Calculating Alpha and Beta diversity: Build a phylogenetic tree using - qiime phylogeny align-to-tree-mafft-fasttree
+qiime phylogeny align-to-tree-mafft-fasttree \
+  --i-sequences rep-seqs.qza \
+  --o-alignment aligned-rep-seqs.qza \
+  --o-masked-alignment masked-aligned-rep-seqs.qza \
+  --o-tree unrooted-tree.qza \
+  --o-rooted-tree rooted-tree.qza
+
+ ## The next command calculates a whole suite of alpha and beta-diversity metrics!
+ #13547 was picked to include ALL data without loosing any samples
+ qiime diversity core-metrics-phylogenetic \
+  --i-phylogeny rooted-tree.qza \
+  --i-table table.qza \
+  --p-sampling-depth 13547 \
+  --m-metadata-file /data/project_data/16S/pyc_manifest \
+  --output-dir core-metrics-results
+
+## Test for associations between categorical metadata columns and alpha diversity data. We’ll do that here for the Faith Phylogenetic Diversity (a measure of community richness) and evenness metrics.
+  
+qiime diversity alpha-group-significance \
+  --i-alpha-diversity core-metrics-results/faith_pd_vector.qza \
+  --m-metadata-file /data/project_data/16S/pyc_manifest \
+  --o-visualization core-metrics-results/faith-pd-group-significance.qzv
+
+qiime diversity alpha-group-significance \
+  --i-alpha-diversity core-metrics-results/evenness_vector.qza \
+  --m-metadata-file /data/project_data/16S/pyc_manifest \
+  --o-visualization core-metrics-results/evenness-group-significance.qzv
+
+# generte shannon vector qzv file 
+qiime diversity alpha-group-significance \
+  --i-alpha-diversity core-metrics-results/shannon_vector.qza \
+  --m-metadata-file /data/project_data/16S/pyc_manifest \
+  --o-visualization core-metrics-results/shannon_vector.qzv
+
+# Assign taxonomies - who’s there?
+# Test for differential abundance using ANCOM or gneiss
+# Export and make pretty plots in R using ggplot2
+
+#Test for differences in beta diversity between groups:
+
+qiime diversity beta-group-significance \
+  --i-distance-matrix core-metrics-results/weighted_unifrac_distance_matrix.qza \
+  --m-metadata-file /data/project_data/16S/pyc_manifest \
+  --m-metadata-column site-animal-health \
+  --o-visualization core-metrics-results/weighted-unifrac-site-animal-health-significance.qzv \
+  --p-pairwise
+
+qiime diversity beta-group-significance \
+  --i-distance-matrix core-metrics-results/weighted_unifrac_distance_matrix.qza \
+  --m-metadata-file /data/project_data/16S/pyc_manifest \
+  --m-metadata-column site-status \
+  --o-visualization core-metrics-results/weighted-unifrac-site-status-group-significance.qzv \
+  --p-pairwise
+
+#Let’s make an Alpha diversity rarefaction plot! Did we over do the sequencing effort?
+
+qiime diversity alpha-rarefaction \
+  --i-table table.qza \
+  --i-phylogeny rooted-tree.qza \
+  --p-max-depth 100000 \
+  --m-metadata-file /data/project_data/16S/pyc_manifest \
+  --o-visualization alpha-rarefaction.qzv
+  
+  
+
+## Discovering Taxonomic Groups! Who's there? 
+# creating reference sequences from OTUs that have been classified 
+# import reference data from greengenes database
+
+qiime tools import \
+  --type 'FeatureData[Sequence]' \
+  --input-path /data/project_data/16S/training-feature-classifiers/gg_13_8_otus/rep_set/99_otus.fasta \
+  --output-path /data/project_data/16S/training-feature-classifiers/99_otus.qza
+
+qiime tools import \
+  --type 'FeatureData[Taxonomy]' \
+  --input-format HeaderlessTSVTaxonomyFormat \
+  --input-path /data/project_data/16S/training-feature-classifiers/gg_13_8_otus/taxonomy/99_otu_taxonomy.txt \
+  --output-path /data/project_data/16S/training-feature-classifiers/ref-taxonomy.qza
+
+# minimul length kept 100bp, shouldnt be longer than 500bp. 
+# Trims it to what we usee to match our taxon reads making reference seq files
+
+qiime feature-classifier extract-reads \
+  --i-sequences 99_otus.qza \
+  --p-f-primer CCTACGGGNGGCWGCAG \
+  --p-r-primer GACTACHVGGGTATCTAATCC \
+  --p-min-length 100 \
+  --p-max-length 500 \
+  --o-reads ref-seqs.qza
+  
+# Train our classifier 
+qiime feature-classifier fit-classifier-naive-bayes \
+  --i-reference-reads ref-seqs.qza \
+  --i-reference-taxonomy ref-taxonomy.qza \
+  --o-classifier classifier.qza
+  
+# test the classifier - start here when using different subsets of data
+qiime feature-classifier classify-sklearn \
+  --i-classifier /data/project_data/16S/training-feature-classifiers/classifier.qza \
+  --i-reads ~/myresults/rep-seqs.qza \
+  --o-classification taxonomy.qza
+
+qiime metadata tabulate \
+  --m-input-file taxonomy.qza \
+  --o-visualization taxonomy.qzv 
+# coppy to home computer and view with Qiime2
+
+# Make Bar Plots of Taxa!
+
+qiime taxa barplot \
+  --i-table ~/myresults/table.qza \
+  --i-taxonomy ~/myresults/taxonomy.qza \
+  --m-metadata-file /data/project_data/16S/pyc_manifest \
+  --o-visualization taxa-bar-plots.qzv
+
+
+
+--------------------------------------------- Analysis past what we did in clas.
+### subsetting the feature tables to only one of the site-animal-health types for network analysis for wach. 
+#we did this for HH, SH, and SS
+qiime feature-table filter-samples \
+  --i-table table.qza \
+  --m-metadata-file /data/project_data/16S/pyc_manifest \
+  --p-where "[site-health-status]='HH'" \
+  --o-filtered-table HH-filtered-table.qza #or SH or HH filtered table qza file
+
+#collapsing the taxanomic classification to the family level (level 5) 
+#this was important for SCNIC analysis because too man ASV make a network too complex to analize with many unknown taxa. 
+qiime taxa collapse \
+  --i-table HH-filtered-table.qza \
+  --i-taxonomy taxonomy.qza \
+  --p-level 5 \
+  --o-collapsed-table HH-table-lev5.qza
+
+
+mkdir SCNIC_subset
+cd SCNIC_subset
+
+### Convert .qza files to .biom and move into subset file
+qiime tools export --input-path HH-table-lev5.qza --output-path HH-table-lev5.biom
+qiime tools export --input-path SH-table-lev5.qza --output-path SH-table-lev5.biom
+qiime tools export --input-path SS-table-lev5.qza --output-path SS-table-lev5.biom
+
+### Run SCNIC on full and subsetted data
+SCNIC_analysis.py within -i Feat-table-lev5.biom/feature-table.biom -o within_output-lev5-All/ -m sparcc
+SCNIC_analysis.py within -i HH-table-lev5.biom/feature-table.biom -o within_output-lev5-HH/ -m sparcc
+SCNIC_analysis.py within -i SH-table-lev5.biom/feature-table.biom -o within_output-lev5-SH/ -m sparcc
+SCNIC_analysis.py within -i SS-table-lev5.biom/feature-table.biom -o within_output-lev5-SS/ -m sparcc
+
+
+# PICRUST 
+qiime tools export \
+  feature-table.qza \
+  --output-dir feature-table.biom
+  
+conda activate picrust2
+picrust2_pipeline.py -s 1117sswd.fna -i feature-table.biom -o picrust2_out_pipeline -p 1
+
+
+#output files from SCNIC were visualized by grabbing the correlation output files and uploading them into a network visualization software gephi. 
